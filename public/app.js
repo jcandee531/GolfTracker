@@ -10,6 +10,11 @@ const eventStatus = document.getElementById("event-status");
 const lastUpdated = document.getElementById("last-updated");
 const refreshNow = document.getElementById("refresh-now");
 const statusMessage = document.getElementById("status-message");
+const historyFile = document.getElementById("history-file");
+const uploadFileButton = document.getElementById("upload-file");
+const uploadJsonButton = document.getElementById("upload-json");
+const historyJson = document.getElementById("history-json");
+const uploadStatus = document.getElementById("upload-status");
 
 let selectedPlayer = null;
 let refreshTimer = null;
@@ -18,6 +23,14 @@ let refreshIntervalMinutes = 30;
 function setStatusMessage(message, isError = false) {
   statusMessage.textContent = message || "";
   statusMessage.classList.toggle("error", Boolean(isError));
+}
+
+function setUploadStatus(message, isError = false) {
+  if (!uploadStatus) {
+    return;
+  }
+  uploadStatus.textContent = message || "";
+  uploadStatus.classList.toggle("error", Boolean(isError));
 }
 
 function formatCurrency(value) {
@@ -260,6 +273,49 @@ function renderHistory(history) {
   });
 }
 
+function buildImportSummary(summary) {
+  if (!summary) {
+    return "Import complete.";
+  }
+  const parts = [
+    `Added ${summary.added || 0}`,
+    `Skipped ${summary.skipped || 0}`
+  ];
+  if (summary.errors?.length) {
+    parts.push(`Errors ${summary.errors.length}`);
+    const firstError = summary.errors[0];
+    if (firstError?.error) {
+      parts.push(`First error line ${firstError.index}: ${firstError.error}`);
+    }
+  }
+  return parts.join(" · ");
+}
+
+async function handleImportResponse(response) {
+  const hasErrors = Boolean(response?.errors?.length);
+  setUploadStatus(buildImportSummary(response), hasErrors);
+  await loadHistory();
+  await loadTotals();
+}
+
+async function uploadCsv(text) {
+  const response = await fetchJson("/api/history/import", {
+    method: "POST",
+    headers: { "Content-Type": "text/csv" },
+    body: text
+  });
+  await handleImportResponse(response);
+}
+
+async function uploadJsonPayload(payload) {
+  const response = await fetchJson("/api/history/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  await handleImportResponse(response);
+}
+
 let searchTimeout;
 searchInput.addEventListener("input", () => {
   const query = searchInput.value.trim();
@@ -285,6 +341,36 @@ searchInput.addEventListener("input", () => {
 document.addEventListener("click", (event) => {
   if (!searchResults.contains(event.target) && event.target !== searchInput) {
     clearSearchResults();
+  }
+});
+
+uploadFileButton.addEventListener("click", async () => {
+  const file = historyFile.files?.[0];
+  if (!file) {
+    setUploadStatus("Select a CSV file before uploading.", true);
+    return;
+  }
+  try {
+    const text = await file.text();
+    await uploadCsv(text);
+    historyFile.value = "";
+  } catch (error) {
+    setUploadStatus(`Upload failed: ${error.message}`, true);
+  }
+});
+
+uploadJsonButton.addEventListener("click", async () => {
+  const rawText = historyJson.value.trim();
+  if (!rawText) {
+    setUploadStatus("Paste JSON records before uploading.", true);
+    return;
+  }
+  try {
+    const payload = JSON.parse(rawText);
+    await uploadJsonPayload(payload);
+    historyJson.value = "";
+  } catch (error) {
+    setUploadStatus(`JSON upload failed: ${error.message}`, true);
   }
 });
 

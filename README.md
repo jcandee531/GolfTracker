@@ -32,3 +32,36 @@ Environment variables:
 
 Projected earnings are estimates. Update `DEFAULT_PURSE_USD` or provide a
 custom payout schedule to match the tournament you are tracking.
+
+## Import historical results
+
+You can upload past tournament results to keep a running total for the current
+calendar year. The UI accepts CSV or JSON.
+
+CSV headers (required):
+
+```
+golferName,eventName,eventEndDate,finalPosition,finalEarnings
+```
+
+Example:
+
+```
+golferName,eventName,eventEndDate,finalPosition,finalEarnings
+Scottie Scheffler,The Players Championship,2026-03-16,1,4500000
+Ludvig Aberg,The Players Championship,2026-03-16,2,2500000
+```
+
+JSON example:
+
+```json
+[
+  {
+    "golferName": "Scottie Scheffler",
+    "eventName": "The Players Championship",
+    "eventEndDate": "2026-03-16",
+    "finalPosition": 1,
+    "finalEarnings": 4500000
+  }
+]
+```

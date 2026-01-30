@@ -47,6 +47,12 @@ let leaderboardCache = {
 };
 
 app.use(express.json({ limit: "1mb" }));
+app.use(
+  express.text({
+    type: ["text/csv", "text/plain", "application/csv"],
+    limit: "1mb"
+  })
+);
 app.use(express.static(path.join(__dirname, "public")));
 
 function safeNumber(value) {
@@ -64,6 +70,161 @@ function parseScore(score) {
   const cleaned = score.replace(/[^\d+-]/g, "");
   const parsed = Number(cleaned);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseMoney(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  const cleaned = String(value).replace(/[^0-9.-]/g, "");
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseDateValue(value) {
+  if (!value) {
+    return null;
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return date.toISOString();
+}
+
+function normalizeHeader(header) {
+  return String(header || "")
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
+}
+
+function parseCsvLine(line) {
+  const values = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    if (inQuotes) {
+      if (char === "\"") {
+        if (line[i + 1] === "\"") {
+          current += "\"";
+          i += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += char;
+      }
+    } else if (char === "\"") {
+      inQuotes = true;
+    } else if (char === ",") {
+      values.push(current.trim());
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  values.push(current.trim());
+  return values;
+}
+
+function parseCsvPayload(csvText) {
+  const lines = String(csvText || "")
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== "");
+  if (!lines.length) {
+    return { headers: [], rows: [] };
+  }
+
+  const headerValues = parseCsvLine(lines[0]);
+  const headers = headerValues.map((header) => normalizeHeader(header));
+  const rows = lines.slice(1).map((line) => {
+    const values = parseCsvLine(line);
+    const record = {};
+    headers.forEach((header, index) => {
+      record[header] = values[index] ?? "";
+    });
+    return record;
+  });
+
+  return { headers, rows };
+}
+
+function normalizeHistoryRecord(raw, nowIso) {
+  const headerMap = {
+    golfername: "golferName",
+    golfer: "golferName",
+    player: "golferName",
+    eventname: "eventName",
+    event: "eventName",
+    tournament: "eventName",
+    eventenddate: "eventEndDate",
+    eventdate: "eventEndDate",
+    enddate: "eventEndDate",
+    finalposition: "finalPosition",
+    position: "finalPosition",
+    finish: "finalPosition",
+    finalearnings: "finalEarnings",
+    earnings: "finalEarnings",
+    payout: "finalEarnings",
+    earningsusd: "finalEarnings",
+    eventid: "eventId",
+    golferid: "golferId"
+  };
+
+  const mapped = {};
+  Object.entries(raw || {}).forEach(([key, value]) => {
+    const normalizedKey = normalizeHeader(key);
+    const mappedKey = headerMap[normalizedKey];
+    if (mappedKey) {
+      mapped[mappedKey] = value;
+    }
+  });
+
+  const golferName = String(mapped.golferName || "").trim();
+  const eventName = String(mapped.eventName || "").trim();
+  const eventEndDate = parseDateValue(mapped.eventEndDate);
+  const finalPosition = safeNumber(mapped.finalPosition);
+  const finalEarnings = parseMoney(mapped.finalEarnings);
+
+  if (!golferName || !eventName) {
+    return { error: "golferName and eventName are required" };
+  }
+  if (!eventEndDate) {
+    return { error: "eventEndDate is required and must be a valid date" };
+  }
+  if (finalEarnings === null) {
+    return { error: "finalEarnings is required" };
+  }
+
+  const item = {
+    id: crypto.randomUUID(),
+    golferId: mapped.golferId ? String(mapped.golferId) : null,
+    golferName,
+    eventId: mapped.eventId ? String(mapped.eventId) : null,
+    eventName,
+    finalPosition,
+    finalEarnings,
+    eventEndDate,
+    finalizedAt: eventEndDate,
+    importedAt: nowIso
+  };
+
+  return { item };
+}
+
+function buildHistoryKey(item) {
+  return [
+    (item.golferName || "").toLowerCase(),
+    (item.eventName || "").toLowerCase(),
+    item.eventEndDate || "",
+    item.finalPosition || "",
+    item.finalEarnings || ""
+  ].join("|");
 }
 
 function estimateEarnings(position, purse, schedule) {
@@ -454,6 +615,77 @@ app.get("/api/history", (req, res) => {
   res.json({
     history: store.history
   });
+});
+
+app.post("/api/history/import", (req, res) => {
+  const nowIso = new Date().toISOString();
+  const contentType = String(req.headers["content-type"] || "");
+  let records = [];
+
+  if (contentType.includes("application/json")) {
+    if (Array.isArray(req.body)) {
+      records = req.body;
+    } else if (Array.isArray(req.body?.records)) {
+      records = req.body.records;
+    } else if (Array.isArray(req.body?.history)) {
+      records = req.body.history;
+    } else {
+      return res.status(400).json({ error: "Expected a JSON array of records" });
+    }
+  } else {
+    const csvText = typeof req.body === "string" ? req.body : "";
+    const parsed = parseCsvPayload(csvText);
+    records = parsed.rows.map((row) => {
+      const mapped = {};
+      Object.entries(row).forEach(([key, value]) => {
+        mapped[key] = value;
+      });
+      return mapped;
+    });
+  }
+
+  if (!records.length) {
+    return res.status(400).json({ error: "No records provided" });
+  }
+
+  const existingKeys = new Set(store.history.map(buildHistoryKey));
+  const errors = [];
+  const added = [];
+  let skipped = 0;
+
+  records.forEach((record, index) => {
+    const { item, error } = normalizeHistoryRecord(record, nowIso);
+    if (error) {
+      errors.push({ index: index + 1, error });
+      return;
+    }
+    const key = buildHistoryKey(item);
+    if (existingKeys.has(key)) {
+      skipped += 1;
+      return;
+    }
+    existingKeys.add(key);
+    added.push(item);
+  });
+
+  if (!added.length) {
+    return res.json({ added: 0, skipped, errors });
+  }
+
+  store.history = [...added, ...store.history];
+
+  saveStore()
+    .then(() => {
+      res.json({
+        added: added.length,
+        skipped,
+        errors
+      });
+    })
+    .catch((error) => {
+      console.warn("Failed to import history:", error.message);
+      res.status(500).json({ error: "Failed to import history" });
+    });
 });
 
 app.get("/api/earnings", (req, res) => {
