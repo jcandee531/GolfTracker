@@ -116,6 +116,28 @@ main {
   max-width: 520px;
 }
 
+.event-select {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 520px;
+  margin: 16px 0;
+}
+
+.event-select label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #374151;
+}
+
+.event-select select {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  font-size: 0.95rem;
+}
+
 #golfer-search {
   width: 100%;
   padding: 12px 14px;
@@ -267,56 +289,6 @@ button.ghost {
   border-radius: 12px;
   background: #f9fafb;
   font-size: 0.95rem;
-}
-
-.import-grid {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  margin-top: 16px;
-}
-
-.import-panel {
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  background: #f9fafb;
-}
-
-.import-panel h4 {
-  margin: 0;
-}
-
-.import-panel input[type="file"] {
-  padding: 6px;
-  border-radius: 8px;
-  background: #ffffff;
-  border: 1px solid #d1d5db;
-}
-
-.import-panel textarea {
-  border-radius: 10px;
-  border: 1px solid #d1d5db;
-  padding: 12px;
-  font-family: "Segoe UI", Arial, sans-serif;
-  font-size: 0.95rem;
-  resize: vertical;
-}
-
-.code-sample {
-  padding: 12px;
-  border-radius: 10px;
-  background: #ffffff;
-  border: 1px dashed #d1d5db;
-  font-size: 0.85rem;
-  overflow-x: auto;
-}
-
-.small {
-  font-size: 0.85rem;
 }
 
 .note-card {

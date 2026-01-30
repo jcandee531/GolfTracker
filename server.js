@@ -19,6 +19,10 @@ const REFRESH_INTERVAL_MS = Math.max(1, REFRESH_INTERVAL_MINUTES) * 60 * 1000;
 const DEFAULT_PURSE_USD = Number(process.env.DEFAULT_PURSE_USD || 8500000);
 const PAYOUT_SCHEDULE_PATH =
   process.env.PAYOUT_SCHEDULE_PATH || path.join(DATA_DIR, "payouts.json");
+const SCHEDULE_REFRESH_MINUTES = Number(
+  process.env.SCHEDULE_REFRESH_MINUTES || 360
+);
+const SCHEDULE_REFRESH_MS = Math.max(10, SCHEDULE_REFRESH_MINUTES) * 60 * 1000;
 
 const DEFAULT_PAYOUT_PCTS = [
   18, 10.9, 6.9, 4.9, 4.1, 3.6, 3.35, 3.1, 2.9, 2.7, 2.5, 2.3, 2.1, 1.9, 1.8,
@@ -46,13 +50,17 @@ let leaderboardCache = {
   error: null
 };
 
+let scheduleCache = {
+  year: null,
+  events: [],
+  eventsById: new Map(),
+  roster: [],
+  lastUpdated: null,
+  status: "loading",
+  error: null
+};
+
 app.use(express.json({ limit: "1mb" }));
-app.use(
-  express.text({
-    type: ["text/csv", "text/plain", "application/csv"],
-    limit: "1mb"
-  })
-);
 app.use(express.static(path.join(__dirname, "public")));
 
 function safeNumber(value) {
@@ -72,159 +80,18 @@ function parseScore(score) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function parseMoney(value) {
-  if (value === null || value === undefined || value === "") {
-    return null;
-  }
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : null;
-  }
-  const cleaned = String(value).replace(/[^0-9.-]/g, "");
-  const parsed = Number(cleaned);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function parseDateValue(value) {
-  if (!value) {
-    return null;
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return null;
-  }
-  return date.toISOString();
-}
-
-function normalizeHeader(header) {
-  return String(header || "")
-    .toLowerCase()
-    .replace(/[\s_-]+/g, "");
-}
-
-function parseCsvLine(line) {
-  const values = [];
-  let current = "";
-  let inQuotes = false;
-
-  for (let i = 0; i < line.length; i += 1) {
-    const char = line[i];
-    if (inQuotes) {
-      if (char === "\"") {
-        if (line[i + 1] === "\"") {
-          current += "\"";
-          i += 1;
-        } else {
-          inQuotes = false;
-        }
-      } else {
-        current += char;
-      }
-    } else if (char === "\"") {
-      inQuotes = true;
-    } else if (char === ",") {
-      values.push(current.trim());
-      current = "";
-    } else {
-      current += char;
-    }
-  }
-  values.push(current.trim());
-  return values;
-}
-
-function parseCsvPayload(csvText) {
-  const lines = String(csvText || "")
-    .split(/\r?\n/)
-    .filter((line) => line.trim() !== "");
-  if (!lines.length) {
-    return { headers: [], rows: [] };
-  }
-
-  const headerValues = parseCsvLine(lines[0]);
-  const headers = headerValues.map((header) => normalizeHeader(header));
-  const rows = lines.slice(1).map((line) => {
-    const values = parseCsvLine(line);
-    const record = {};
-    headers.forEach((header, index) => {
-      record[header] = values[index] ?? "";
-    });
-    return record;
-  });
-
-  return { headers, rows };
-}
-
-function normalizeHistoryRecord(raw, nowIso) {
-  const headerMap = {
-    golfername: "golferName",
-    golfer: "golferName",
-    player: "golferName",
-    eventname: "eventName",
-    event: "eventName",
-    tournament: "eventName",
-    eventenddate: "eventEndDate",
-    eventdate: "eventEndDate",
-    enddate: "eventEndDate",
-    finalposition: "finalPosition",
-    position: "finalPosition",
-    finish: "finalPosition",
-    finalearnings: "finalEarnings",
-    earnings: "finalEarnings",
-    payout: "finalEarnings",
-    earningsusd: "finalEarnings",
-    eventid: "eventId",
-    golferid: "golferId"
-  };
-
-  const mapped = {};
-  Object.entries(raw || {}).forEach(([key, value]) => {
-    const normalizedKey = normalizeHeader(key);
-    const mappedKey = headerMap[normalizedKey];
-    if (mappedKey) {
-      mapped[mappedKey] = value;
+function buildScoreboardUrl(params = {}) {
+  const url = new URL(PGA_SCOREBOARD_URL);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      url.searchParams.set(key, value);
     }
   });
-
-  const golferName = String(mapped.golferName || "").trim();
-  const eventName = String(mapped.eventName || "").trim();
-  const eventEndDate = parseDateValue(mapped.eventEndDate);
-  const finalPosition = safeNumber(mapped.finalPosition);
-  const finalEarnings = parseMoney(mapped.finalEarnings);
-
-  if (!golferName || !eventName) {
-    return { error: "golferName and eventName are required" };
-  }
-  if (!eventEndDate) {
-    return { error: "eventEndDate is required and must be a valid date" };
-  }
-  if (finalEarnings === null) {
-    return { error: "finalEarnings is required" };
-  }
-
-  const item = {
-    id: crypto.randomUUID(),
-    golferId: mapped.golferId ? String(mapped.golferId) : null,
-    golferName,
-    eventId: mapped.eventId ? String(mapped.eventId) : null,
-    eventName,
-    finalPosition,
-    finalEarnings,
-    eventEndDate,
-    finalizedAt: eventEndDate,
-    importedAt: nowIso
-  };
-
-  return { item };
+  return url.toString();
 }
 
-function buildHistoryKey(item) {
-  return [
-    (item.golferName || "").toLowerCase(),
-    (item.eventName || "").toLowerCase(),
-    item.eventEndDate || "",
-    item.finalPosition || "",
-    item.finalEarnings || ""
-  ].join("|");
+function getCurrentYear() {
+  return new Date().getFullYear();
 }
 
 function estimateEarnings(position, purse, schedule) {
@@ -295,6 +162,89 @@ function normalizeCompetitors(competitors, eventInfo, purse, schedule) {
 
   computePositionDisplay(players);
   return players;
+}
+
+function normalizeScheduleCompetitors(competitors, eventInfo, purse, schedule) {
+  const players = (competitors || [])
+    .map((competitor) => {
+      const position = safeNumber(competitor.order);
+      const scoreDisplay = competitor.score || "E";
+      const athlete = competitor.athlete || {};
+      return {
+        id: competitor.id,
+        name:
+          athlete.displayName ||
+          athlete.fullName ||
+          competitor.displayName ||
+          "Unknown",
+        shortName: athlete.shortName || competitor.shortName || null,
+        country: athlete.flag?.alt || null,
+        position,
+        score: parseScore(scoreDisplay),
+        scoreDisplay,
+        status: eventInfo.statusDescription,
+        projectedEarnings: estimateEarnings(position, purse, schedule),
+        finalEarnings: eventInfo.isFinal
+          ? estimateEarnings(position, purse, schedule)
+          : null
+      };
+    })
+    .sort((a, b) => (a.position || 9999) - (b.position || 9999));
+
+  computePositionDisplay(players);
+  return players;
+}
+
+function buildEventInfoFromSchedule(eventData) {
+  if (!eventData) {
+    return null;
+  }
+  return {
+    id: eventData.id,
+    name: eventData.name,
+    shortName: eventData.shortName,
+    startDate: eventData.startDate,
+    endDate: eventData.endDate,
+    statusDescription: eventData.statusDescription,
+    statusState: eventData.statusState,
+    isFinal: eventData.isFinal,
+    purse: DEFAULT_PURSE_USD,
+    purseEstimated: true
+  };
+}
+
+function findPlayerByName(players, golferName) {
+  if (!players || !golferName) {
+    return null;
+  }
+  const lowered = golferName.trim().toLowerCase();
+  return players.find(
+    (player) => player.name.toLowerCase() === lowered
+  );
+}
+
+function findSchedulePlayer(eventData, golferId, golferName) {
+  if (!eventData) {
+    return null;
+  }
+  if (golferId && eventData.playersById?.has(golferId)) {
+    return eventData.playersById.get(golferId);
+  }
+  if (golferName) {
+    const match = findPlayerByName(eventData.players, golferName);
+    if (match) {
+      return match;
+    }
+  }
+  return null;
+}
+
+function buildHistoryKey(item) {
+  return [
+    (item.golferId || item.golferName || "").toLowerCase(),
+    (item.eventId || item.eventName || "").toLowerCase(),
+    item.eventEndDate || ""
+  ].join("|");
 }
 
 function buildFallbackLeaderboard() {
@@ -457,6 +407,127 @@ async function refreshLeaderboard() {
   }
 }
 
+function buildScheduleEvent(event) {
+  if (!event) {
+    return null;
+  }
+  const status = formatEventStatus(event);
+  const competition = event.competitions?.[0];
+  const competitors = competition?.competitors || [];
+  const eventInfo = {
+    id: event.id,
+    name: event.name,
+    shortName: event.shortName,
+    startDate: event.date,
+    endDate: event.endDate,
+    statusDescription: status.description || "Status unavailable",
+    statusState: status.state || "unknown",
+    isFinal: Boolean(status.completed),
+    hasField: competitors.length > 0,
+    fieldCount: competitors.length
+  };
+
+  const players = normalizeScheduleCompetitors(
+    competitors,
+    eventInfo,
+    DEFAULT_PURSE_USD,
+    payoutSchedule
+  );
+
+  const playersById = new Map();
+  players.forEach((player) => {
+    if (player.id) {
+      playersById.set(player.id, player);
+    }
+  });
+
+  return {
+    ...eventInfo,
+    players,
+    playersById
+  };
+}
+
+async function refreshSchedule(year = getCurrentYear()) {
+  try {
+    const url = buildScoreboardUrl({
+      dates: `${year}0101-${year}1231`
+    });
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "pga-earnings-tracker"
+      }
+    });
+    if (!response.ok) {
+      throw new Error(`Schedule request failed: ${response.status}`);
+    }
+    const data = await response.json();
+    const events = (data.events || [])
+      .map(buildScheduleEvent)
+      .filter(Boolean)
+      .sort(
+        (a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime()
+      );
+
+    const eventsById = new Map();
+    const rosterMap = new Map();
+
+    events.forEach((event) => {
+      eventsById.set(event.id, event);
+      event.players.forEach((player) => {
+        const key = player.id || player.name.toLowerCase();
+        if (!rosterMap.has(key)) {
+          rosterMap.set(key, {
+            id: player.id || null,
+            name: player.name,
+            shortName: player.shortName || null
+          });
+        }
+      });
+    });
+
+    scheduleCache = {
+      year,
+      events,
+      eventsById,
+      roster: Array.from(rosterMap.values()).sort((a, b) =>
+        a.name.localeCompare(b.name)
+      ),
+      lastUpdated: new Date().toISOString(),
+      status: "ok",
+      error: null
+    };
+    finalizeSelectionsFromSchedule();
+  } catch (error) {
+    console.warn("Schedule refresh failed:", error.message);
+    if (!scheduleCache.events.length) {
+      scheduleCache = {
+        year,
+        events: [],
+        eventsById: new Map(),
+        roster: [],
+        lastUpdated: new Date().toISOString(),
+        status: "error",
+        error: error.message
+      };
+    } else {
+      scheduleCache.status = "error";
+      scheduleCache.error = error.message;
+    }
+  }
+}
+
+async function ensureSchedule(year = getCurrentYear()) {
+  const lastUpdated = scheduleCache.lastUpdated
+    ? new Date(scheduleCache.lastUpdated).getTime()
+    : 0;
+  const isStale =
+    !lastUpdated || Date.now() - lastUpdated > SCHEDULE_REFRESH_MS;
+  if (scheduleCache.year !== year || isStale) {
+    await refreshSchedule(year);
+  }
+}
+
 function finalizeSelectionsIfNeeded() {
   const event = leaderboardCache.event;
   if (!event || !event.isFinal) {
@@ -465,6 +536,7 @@ function finalizeSelectionsIfNeeded() {
 
   const now = new Date().toISOString();
   const remainingSelections = [];
+  const existingKeys = new Set(store.history.map(buildHistoryKey));
 
   store.selections.forEach((selection) => {
     if (selection.eventId !== event.id) {
@@ -491,8 +563,10 @@ function finalizeSelectionsIfNeeded() {
       finalizedAt: now
     };
 
-    if (!store.history.find((item) => item.id === selection.id)) {
+    const historyKey = buildHistoryKey(historyItem);
+    if (!existingKeys.has(historyKey)) {
       store.history.unshift(historyItem);
+      existingKeys.add(historyKey);
     }
   });
 
@@ -502,16 +576,90 @@ function finalizeSelectionsIfNeeded() {
   });
 }
 
+function finalizeSelectionsFromSchedule() {
+  if (!scheduleCache.eventsById.size || !store.selections.length) {
+    return;
+  }
+  const existingKeys = new Set(store.history.map(buildHistoryKey));
+  const remainingSelections = [];
+  const now = new Date().toISOString();
+
+  store.selections.forEach((selection) => {
+    const eventData = scheduleCache.eventsById.get(selection.eventId);
+    if (!eventData || !eventData.isFinal) {
+      remainingSelections.push(selection);
+      return;
+    }
+
+    const player = findSchedulePlayer(
+      eventData,
+      selection.golferId,
+      selection.golferName
+    );
+    if (!player || !player.position) {
+      remainingSelections.push(selection);
+      return;
+    }
+
+    const historyItem = {
+      id: selection.id,
+      golferId: selection.golferId || player.id || null,
+      golferName: selection.golferName || player.name,
+      eventId: eventData.id,
+      eventName: eventData.name,
+      finalPosition: player.position,
+      finalEarnings: estimateEarnings(
+        player.position,
+        DEFAULT_PURSE_USD,
+        payoutSchedule
+      ),
+      eventEndDate: eventData.endDate,
+      finalizedAt: now
+    };
+
+    const historyKey = buildHistoryKey(historyItem);
+    if (!existingKeys.has(historyKey)) {
+      store.history.unshift(historyItem);
+      existingKeys.add(historyKey);
+    }
+  });
+
+  store.selections = remainingSelections;
+  saveStore().catch((error) => {
+    console.warn("Failed to persist schedule selections:", error.message);
+  });
+}
+
 function buildSelectionResponse(selection) {
-  const player = leaderboardCache.playersById.get(selection.golferId);
+  const currentEvent = leaderboardCache.event;
+  let player = null;
+  let eventInfo = null;
+
+  if (currentEvent && selection.eventId === currentEvent.id) {
+    player = leaderboardCache.playersById.get(selection.golferId);
+    eventInfo = currentEvent;
+  } else {
+    const scheduleEvent = scheduleCache.eventsById.get(selection.eventId);
+    player = findSchedulePlayer(
+      scheduleEvent,
+      selection.golferId,
+      selection.golferName
+    );
+    eventInfo = buildEventInfoFromSchedule(scheduleEvent);
+  }
+
+  const statusNote =
+    eventInfo?.isFinal && !player ? "Final results unavailable" : null;
+
   return {
     ...selection,
     currentPosition: player?.position || null,
     positionDisplay: player?.positionDisplay || "--",
     scoreDisplay: player?.scoreDisplay || "--",
-    projectedEarnings: player?.projectedEarnings || 0,
-    finalEarnings: player?.finalEarnings || null,
-    event: leaderboardCache.event
+    projectedEarnings: player ? player.projectedEarnings : null,
+    finalEarnings: player ? player.finalEarnings : null,
+    event: eventInfo,
+    statusNote
   };
 }
 
@@ -544,6 +692,92 @@ app.get("/api/golfers", (req, res) => {
   });
 });
 
+app.get("/api/schedule", async (req, res) => {
+  const year = Number(req.query.year || getCurrentYear());
+  await ensureSchedule(year);
+  const currentEventId = leaderboardCache.event?.id || null;
+
+  const events = scheduleCache.events.map((event) => ({
+    id: event.id,
+    name: event.name,
+    shortName: event.shortName,
+    startDate: event.startDate,
+    endDate: event.endDate,
+    statusDescription: event.statusDescription,
+    statusState: event.statusState,
+    isFinal: event.isFinal,
+    hasField: event.hasField,
+    fieldCount: event.fieldCount,
+    isCurrent: currentEventId === event.id
+  }));
+
+  res.json({
+    year,
+    currentEventId,
+    events,
+    lastUpdated: scheduleCache.lastUpdated,
+    status: scheduleCache.status,
+    error: scheduleCache.error
+  });
+});
+
+app.get("/api/schedule/:eventId/golfers", async (req, res) => {
+  const year = Number(req.query.year || getCurrentYear());
+  await ensureSchedule(year);
+  const { eventId } = req.params;
+  const eventData = scheduleCache.eventsById.get(eventId);
+  if (!eventData) {
+    return res.status(404).json({ error: "Tournament not found in schedule" });
+  }
+
+  const search = String(req.query.search || "").trim().toLowerCase();
+  const limit = Number(req.query.limit || 8);
+  let players = eventData.players;
+
+  if (search) {
+    players = players.filter((player) => {
+      const full = player.name.toLowerCase();
+      const shortName = (player.shortName || "").toLowerCase();
+      return full.includes(search) || shortName.includes(search);
+    });
+  }
+
+  res.json({
+    event: {
+      id: eventData.id,
+      name: eventData.name,
+      startDate: eventData.startDate,
+      endDate: eventData.endDate,
+      statusDescription: eventData.statusDescription,
+      statusState: eventData.statusState,
+      isFinal: eventData.isFinal,
+      hasField: eventData.hasField,
+      fieldCount: eventData.fieldCount
+    },
+    players: players.slice(0, Math.max(1, limit))
+  });
+});
+
+app.get("/api/roster", async (req, res) => {
+  const year = Number(req.query.year || getCurrentYear());
+  await ensureSchedule(year);
+  const search = String(req.query.search || "").trim().toLowerCase();
+  const limit = Number(req.query.limit || 12);
+  let players = scheduleCache.roster;
+
+  if (search) {
+    players = players.filter((player) => {
+      const full = player.name.toLowerCase();
+      const shortName = (player.shortName || "").toLowerCase();
+      return full.includes(search) || shortName.includes(search);
+    });
+  }
+
+  res.json({
+    players: players.slice(0, Math.max(1, limit))
+  });
+});
+
 app.get("/api/selections", (req, res) => {
   const selections = store.selections.map(buildSelectionResponse);
   res.json({
@@ -551,43 +785,132 @@ app.get("/api/selections", (req, res) => {
   });
 });
 
-app.post("/api/selections", (req, res) => {
-  const golferId = req.body?.golferId;
-  if (!golferId) {
-    return res.status(400).json({ error: "golferId is required" });
+app.post("/api/selections", async (req, res) => {
+  const golferId = req.body?.golferId ? String(req.body.golferId) : null;
+  const golferName = req.body?.golferName
+    ? String(req.body.golferName).trim()
+    : null;
+  const requestedEventId = req.body?.eventId
+    ? String(req.body.eventId)
+    : null;
+
+  const currentEvent = leaderboardCache.event;
+  const eventId = requestedEventId || currentEvent?.id;
+
+  if (!eventId) {
+    return res.status(400).json({ error: "eventId is required" });
   }
 
-  const event = leaderboardCache.event;
-  if (!event) {
-    return res.status(503).json({ error: "Event data not available yet" });
+  await ensureSchedule(getCurrentYear());
+
+  let eventInfo = null;
+  let scheduleEvent = null;
+
+  if (currentEvent && eventId === currentEvent.id) {
+    eventInfo = currentEvent;
+  } else {
+    scheduleEvent = scheduleCache.eventsById.get(eventId);
+    if (!scheduleEvent) {
+      return res
+        .status(404)
+        .json({ error: "Tournament not found in schedule" });
+    }
+    eventInfo = buildEventInfoFromSchedule(scheduleEvent);
   }
 
-  const player = leaderboardCache.playersById.get(String(golferId));
-  if (!player) {
-    return res.status(404).json({ error: "Golfer not found in current event" });
+  let player = null;
+  if (currentEvent && eventId === currentEvent.id) {
+    if (golferId) {
+      player = leaderboardCache.playersById.get(golferId);
+    }
+    if (!player && golferName) {
+      player = findPlayerByName(leaderboardCache.players, golferName);
+    }
+    if (!player) {
+      return res.status(404).json({ error: "Golfer not found in current event" });
+    }
+  } else if (scheduleEvent) {
+    player = findSchedulePlayer(scheduleEvent, golferId, golferName);
+    if (!player && scheduleEvent.hasField) {
+      return res
+        .status(404)
+        .json({ error: "Golfer not found in selected event" });
+    }
   }
 
-  const alreadySaved = store.selections.find(
-    (selection) =>
-      selection.golferId === String(golferId) && selection.eventId === event.id
-  );
+  const resolvedName = player?.name || golferName;
+  if (!resolvedName) {
+    return res.status(400).json({ error: "golferName is required" });
+  }
+
+  if (eventInfo?.isFinal) {
+    if (!player || !player.position) {
+      return res.status(400).json({
+        error: "Final results are not available for that golfer"
+      });
+    }
+
+    const historyItem = {
+      id: crypto.randomUUID(),
+      golferId: player.id || golferId || null,
+      golferName: resolvedName,
+      eventId: eventInfo.id,
+      eventName: eventInfo.name,
+      finalPosition: player.position,
+      finalEarnings: estimateEarnings(
+        player.position,
+        eventInfo.purse || DEFAULT_PURSE_USD,
+        payoutSchedule
+      ),
+      eventEndDate: eventInfo.endDate,
+      finalizedAt: new Date().toISOString()
+    };
+    const historyKey = buildHistoryKey(historyItem);
+    const existingHistory = store.history.find(
+      (item) => buildHistoryKey(item) === historyKey
+    );
+    if (existingHistory) {
+      return res.json({ type: "history", item: existingHistory });
+    }
+
+    store.history.unshift(historyItem);
+    return saveStore()
+      .then(() => res.status(201).json({ type: "history", item: historyItem }))
+      .catch((error) => {
+        console.warn("Failed to save history:", error.message);
+        res.status(500).json({ error: "Failed to save history" });
+      });
+  }
+
+  const alreadySaved = store.selections.find((selection) => {
+    if (selection.eventId !== eventId) {
+      return false;
+    }
+    if (golferId && selection.golferId === golferId) {
+      return true;
+    }
+    return (
+      selection.golferName?.toLowerCase() === resolvedName.toLowerCase()
+    );
+  });
+
   if (alreadySaved) {
-    return res.json(buildSelectionResponse(alreadySaved));
+    return res.json({ type: "selection", selection: buildSelectionResponse(alreadySaved) });
   }
 
   const selection = {
     id: crypto.randomUUID(),
-    golferId: String(golferId),
-    golferName: player.name,
-    eventId: event.id,
-    eventName: event.name,
+    golferId: player?.id || golferId || null,
+    golferName: resolvedName,
+    eventId: eventInfo.id,
+    eventName: eventInfo.name,
     createdAt: new Date().toISOString()
   };
   store.selections.push(selection);
 
   saveStore()
     .then(() => {
-      res.status(201).json(buildSelectionResponse(selection));
+      res.status(201).json({ type: "selection", selection: buildSelectionResponse(selection) });
     })
     .catch((error) => {
       console.warn("Failed to save selection:", error.message);
@@ -615,77 +938,6 @@ app.get("/api/history", (req, res) => {
   res.json({
     history: store.history
   });
-});
-
-app.post("/api/history/import", (req, res) => {
-  const nowIso = new Date().toISOString();
-  const contentType = String(req.headers["content-type"] || "");
-  let records = [];
-
-  if (contentType.includes("application/json")) {
-    if (Array.isArray(req.body)) {
-      records = req.body;
-    } else if (Array.isArray(req.body?.records)) {
-      records = req.body.records;
-    } else if (Array.isArray(req.body?.history)) {
-      records = req.body.history;
-    } else {
-      return res.status(400).json({ error: "Expected a JSON array of records" });
-    }
-  } else {
-    const csvText = typeof req.body === "string" ? req.body : "";
-    const parsed = parseCsvPayload(csvText);
-    records = parsed.rows.map((row) => {
-      const mapped = {};
-      Object.entries(row).forEach(([key, value]) => {
-        mapped[key] = value;
-      });
-      return mapped;
-    });
-  }
-
-  if (!records.length) {
-    return res.status(400).json({ error: "No records provided" });
-  }
-
-  const existingKeys = new Set(store.history.map(buildHistoryKey));
-  const errors = [];
-  const added = [];
-  let skipped = 0;
-
-  records.forEach((record, index) => {
-    const { item, error } = normalizeHistoryRecord(record, nowIso);
-    if (error) {
-      errors.push({ index: index + 1, error });
-      return;
-    }
-    const key = buildHistoryKey(item);
-    if (existingKeys.has(key)) {
-      skipped += 1;
-      return;
-    }
-    existingKeys.add(key);
-    added.push(item);
-  });
-
-  if (!added.length) {
-    return res.json({ added: 0, skipped, errors });
-  }
-
-  store.history = [...added, ...store.history];
-
-  saveStore()
-    .then(() => {
-      res.json({
-        added: added.length,
-        skipped,
-        errors
-      });
-    })
-    .catch((error) => {
-      console.warn("Failed to import history:", error.message);
-      res.status(500).json({ error: "Failed to import history" });
-    });
 });
 
 app.get("/api/earnings", (req, res) => {
@@ -717,9 +969,11 @@ app.post("/api/refresh", async (req, res) => {
 async function startServer() {
   store = await loadStore();
   payoutSchedule = await loadPayoutSchedule();
+  await refreshSchedule(getCurrentYear());
   await refreshLeaderboard();
 
   setInterval(refreshLeaderboard, REFRESH_INTERVAL_MS);
+  setInterval(() => refreshSchedule(getCurrentYear()), SCHEDULE_REFRESH_MS);
 
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);

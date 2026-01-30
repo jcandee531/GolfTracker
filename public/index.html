@@ -33,8 +33,13 @@
         <section class="card">
           <h2>Find a golfer</h2>
           <p class="muted">
-            Start typing to see live search results from the current PGA event.
+            Choose a tournament from this year and search for a golfer.
           </p>
+          <div class="event-select">
+            <label for="event-select">Tournament</label>
+            <select id="event-select"></select>
+            <p id="event-meta" class="muted"></p>
+          </div>
           <div class="search">
             <input
               id="golfer-search"
@@ -72,42 +77,6 @@
               <span>Finalized</span>
             </div>
             <div id="history-rows" class="table-body"></div>
-          </div>
-        </section>
-
-        <section class="card">
-          <div class="card-header">
-            <h2>Import historical results</h2>
-            <span id="upload-status" class="muted"></span>
-          </div>
-          <p class="muted">
-            Upload historical golfer results from past tournaments this year to
-            include them in your earnings totals.
-          </p>
-          <div class="import-grid">
-            <div class="import-panel">
-              <h4>Upload CSV</h4>
-              <input id="history-file" type="file" accept=".csv,text/csv" />
-              <button id="upload-file" class="secondary">Upload file</button>
-              <p class="muted small">
-                Required headers:
-                golferName,eventName,eventEndDate,finalPosition,finalEarnings
-              </p>
-              <pre class="code-sample">
-golferName,eventName,eventEndDate,finalPosition,finalEarnings
-Scottie Scheffler,The Players Championship,2026-03-16,1,4500000
-Ludvig Aberg,The Players Championship,2026-03-16,2,2500000</pre
-              >
-            </div>
-            <div class="import-panel">
-              <h4>Paste JSON</h4>
-              <textarea
-                id="history-json"
-                rows="7"
-                placeholder='[{"golferName":"Scottie Scheffler","eventName":"The Players Championship","eventEndDate":"2026-03-16","finalPosition":1,"finalEarnings":4500000}]'
-              ></textarea>
-              <button id="upload-json" class="secondary">Upload JSON</button>
-            </div>
           </div>
         </section>
 

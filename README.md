@@ -26,6 +26,7 @@ Environment variables:
 - `DATA_DIR`: Directory for persisted data (default `./data`)
 - `PGA_SCOREBOARD_URL`: PGA scoreboard source URL
 - `REFRESH_INTERVAL_MINUTES`: Refresh interval in minutes (default 30)
+- `SCHEDULE_REFRESH_MINUTES`: Schedule refresh interval (default 360)
 - `DEFAULT_PURSE_USD`: Purse used for earnings projections (default 8,500,000)
 - `PAYOUT_SCHEDULE_PATH`: Optional JSON array of payout percentages
   (default `./data/payouts.json` if present)
@@ -33,35 +34,9 @@ Environment variables:
 Projected earnings are estimates. Update `DEFAULT_PURSE_USD` or provide a
 custom payout schedule to match the tournament you are tracking.
 
-## Import historical results
+## Selecting past and upcoming tournaments
 
-You can upload past tournament results to keep a running total for the current
-calendar year. The UI accepts CSV or JSON.
-
-CSV headers (required):
-
-```
-golferName,eventName,eventEndDate,finalPosition,finalEarnings
-```
-
-Example:
-
-```
-golferName,eventName,eventEndDate,finalPosition,finalEarnings
-Scottie Scheffler,The Players Championship,2026-03-16,1,4500000
-Ludvig Aberg,The Players Championship,2026-03-16,2,2500000
-```
-
-JSON example:
-
-```json
-[
-  {
-    "golferName": "Scottie Scheffler",
-    "eventName": "The Players Championship",
-    "eventEndDate": "2026-03-16",
-    "finalPosition": 1,
-    "finalEarnings": 4500000
-  }
-]
-```
+Use the tournament dropdown to choose any event from this year's PGA schedule.
+When you pick a completed tournament, the golfer is added directly to the
+historical results table. Upcoming events are saved in your selections so you
+can revisit them once the field is published or the event is in progress.

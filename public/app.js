@@ -10,27 +10,18 @@ const eventStatus = document.getElementById("event-status");
 const lastUpdated = document.getElementById("last-updated");
 const refreshNow = document.getElementById("refresh-now");
 const statusMessage = document.getElementById("status-message");
-const historyFile = document.getElementById("history-file");
-const uploadFileButton = document.getElementById("upload-file");
-const uploadJsonButton = document.getElementById("upload-json");
-const historyJson = document.getElementById("history-json");
-const uploadStatus = document.getElementById("upload-status");
+const eventSelect = document.getElementById("event-select");
+const eventMeta = document.getElementById("event-meta");
 
 let selectedPlayer = null;
+let selectedEvent = null;
+let scheduleEvents = [];
 let refreshTimer = null;
 let refreshIntervalMinutes = 30;
 
 function setStatusMessage(message, isError = false) {
   statusMessage.textContent = message || "";
   statusMessage.classList.toggle("error", Boolean(isError));
-}
-
-function setUploadStatus(message, isError = false) {
-  if (!uploadStatus) {
-    return;
-  }
-  uploadStatus.textContent = message || "";
-  uploadStatus.classList.toggle("error", Boolean(isError));
 }
 
 function formatCurrency(value) {
@@ -121,10 +112,29 @@ async function loadTotals() {
   totalEarnings.textContent = formatCurrency(data.total || 0);
 }
 
-function renderSearchResults(players) {
+function renderSearchResults(players, query) {
   searchResults.innerHTML = "";
+  const allowManual = selectedEvent && !selectedEvent.hasField;
+  const trimmedQuery = query?.trim();
+
+  if (allowManual && trimmedQuery) {
+    const manualItem = document.createElement("div");
+    manualItem.className = "search-item";
+    manualItem.innerHTML = `
+      <span>Use "${trimmedQuery}"</span>
+      <span class="muted">Manual entry</span>
+    `;
+    manualItem.addEventListener("click", () =>
+      selectPlayer({ id: null, name: trimmedQuery, manual: true })
+    );
+    searchResults.appendChild(manualItem);
+  }
+
   if (!players.length) {
-    searchResults.innerHTML = `<div class="empty">No matching golfers.</div>`;
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No matching golfers.";
+    searchResults.appendChild(empty);
     searchResults.classList.add("active");
     return;
   }
@@ -164,19 +174,24 @@ function renderPreview(player) {
     player.finalEarnings !== null && player.finalEarnings !== undefined
       ? formatCurrency(player.finalEarnings)
       : "--";
+  const projectedEarnings =
+    player.projectedEarnings !== null && player.projectedEarnings !== undefined
+      ? formatCurrency(player.projectedEarnings)
+      : "--";
+  const eventLabel = selectedEvent?.name || "Current event";
+  const eventStatusLabel = selectedEvent?.statusDescription || "Status unknown";
 
   preview.innerHTML = `
     <div class="preview-card">
       <div>
         <h3>${player.name}</h3>
-        <p class="muted">Current position: ${
+        <p class="muted">${eventLabel} · ${eventStatusLabel}</p>
+        <p class="muted">Position: ${
           player.positionDisplay || "--"
         } | Score ${player.scoreDisplay || "--"}</p>
       </div>
       <div class="preview-meta">
-        <span class="badge">Projected ${formatCurrency(
-          player.projectedEarnings || 0
-        )}</span>
+        <span class="badge">Projected ${projectedEarnings}</span>
         <span class="badge">Final ${finalEarnings}</span>
       </div>
       <button id="save-golfer">Save golfer</button>
@@ -189,14 +204,36 @@ function renderPreview(player) {
 
 async function saveSelection(player) {
   try {
-    await fetchJson("/api/selections", {
+    if (!selectedEvent) {
+      setStatusMessage("Select a tournament before saving.", true);
+      return;
+    }
+    const golferName = player?.name || searchInput.value.trim();
+    if (!golferName) {
+      setStatusMessage("Enter a golfer name before saving.", true);
+      return;
+    }
+    const payload = {
+      eventId: selectedEvent.id,
+      golferName
+    };
+    if (player?.id) {
+      payload.golferId = player.id;
+    }
+    const response = await fetchJson("/api/selections", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ golferId: player.id })
+      body: JSON.stringify(payload)
     });
     selectedPlayer = null;
     preview.innerHTML = "";
     searchInput.value = "";
+    setStatusMessage(
+      response.type === "history"
+        ? "Added to historical selections."
+        : "Saved to your golfer list.",
+      false
+    );
     await loadSelections();
     await loadHistory();
     await loadTotals();
@@ -219,18 +256,32 @@ function renderSelections(selections) {
       selection.finalEarnings !== null && selection.finalEarnings !== undefined
         ? formatCurrency(selection.finalEarnings)
         : "--";
+    const eventStatus = selection.event?.statusDescription || "Status unknown";
+    const eventDates = selection.event
+      ? formatDateRange(selection.event.startDate, selection.event.endDate)
+      : "--";
+    const statusNote = selection.statusNote
+      ? `<p class="muted">${selection.statusNote}</p>`
+      : "";
+    const projectedText =
+      selection.projectedEarnings !== null &&
+      selection.projectedEarnings !== undefined
+        ? formatCurrency(selection.projectedEarnings)
+        : "--";
 
     card.innerHTML = `
       <div>
         <h3>${selection.golferName}</h3>
-        <p class="muted">${selection.eventName || "Current event"}</p>
+        <p class="muted">${selection.eventName || "Event"} · ${eventStatus}</p>
+        <p class="muted">${eventDates}</p>
+        ${statusNote}
       </div>
       <div class="preview-meta">
         <span>Position ${selection.positionDisplay || "--"}</span>
         <span>Score ${selection.scoreDisplay || "--"}</span>
       </div>
       <div class="preview-meta">
-        <span>Projected ${formatCurrency(selection.projectedEarnings || 0)}</span>
+        <span>Projected ${projectedText}</span>
         <span>Final ${finalText}</span>
       </div>
       <button class="ghost" data-id="${selection.id}">Remove</button>
@@ -273,47 +324,100 @@ function renderHistory(history) {
   });
 }
 
-function buildImportSummary(summary) {
-  if (!summary) {
-    return "Import complete.";
+function formatShortDate(value) {
+  if (!value) {
+    return "--";
   }
-  const parts = [
-    `Added ${summary.added || 0}`,
-    `Skipped ${summary.skipped || 0}`
-  ];
-  if (summary.errors?.length) {
-    parts.push(`Errors ${summary.errors.length}`);
-    const firstError = summary.errors[0];
-    if (firstError?.error) {
-      parts.push(`First error line ${firstError.index}: ${firstError.error}`);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "--";
+  }
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric"
+  });
+}
+
+function formatDateRange(startDate, endDate) {
+  if (!startDate && !endDate) {
+    return "--";
+  }
+  return `${formatShortDate(startDate)} - ${formatShortDate(endDate)}`;
+}
+
+function eventStatusTag(event) {
+  if (event.isCurrent) {
+    return "Current";
+  }
+  if (event.isFinal) {
+    return "Final";
+  }
+  if (event.statusState === "in") {
+    return "Live";
+  }
+  return "Upcoming";
+}
+
+function formatEventLabel(event) {
+  return `[${eventStatusTag(event)}] ${event.name} (${formatShortDate(
+    event.startDate
+  )})`;
+}
+
+function setSelectedEvent(event) {
+  selectedEvent = event;
+  selectedPlayer = null;
+  preview.innerHTML = "";
+  clearSearchResults();
+
+  if (!event) {
+    eventMeta.textContent = "No schedule data available.";
+    return;
+  }
+
+  const fieldText = event.hasField
+    ? `${event.fieldCount} golfers`
+    : "Field not posted yet";
+  eventMeta.textContent = `${event.statusDescription} · ${formatDateRange(
+    event.startDate,
+    event.endDate
+  )} · ${fieldText}`;
+  searchInput.placeholder = event.hasField
+    ? "Search golfers by name"
+    : "Type a golfer name for this tournament";
+}
+
+function renderEventOptions(events) {
+  eventSelect.innerHTML = "";
+  events.forEach((event) => {
+    const option = document.createElement("option");
+    option.value = event.id;
+    option.textContent = formatEventLabel(event);
+    eventSelect.appendChild(option);
+  });
+}
+
+async function loadSchedule() {
+  try {
+    const data = await fetchJson("/api/schedule");
+    const previousId = selectedEvent?.id;
+    scheduleEvents = data.events || [];
+    renderEventOptions(scheduleEvents);
+
+    if (!scheduleEvents.length) {
+      setSelectedEvent(null);
+      return;
     }
+
+    const selectedId = previousId || data.currentEventId;
+    const selected =
+      scheduleEvents.find((event) => event.id === selectedId) ||
+      scheduleEvents[0];
+    eventSelect.value = selected.id;
+    setSelectedEvent(selected);
+  } catch (error) {
+    setStatusMessage(`Schedule failed: ${error.message}`, true);
   }
-  return parts.join(" · ");
-}
-
-async function handleImportResponse(response) {
-  const hasErrors = Boolean(response?.errors?.length);
-  setUploadStatus(buildImportSummary(response), hasErrors);
-  await loadHistory();
-  await loadTotals();
-}
-
-async function uploadCsv(text) {
-  const response = await fetchJson("/api/history/import", {
-    method: "POST",
-    headers: { "Content-Type": "text/csv" },
-    body: text
-  });
-  await handleImportResponse(response);
-}
-
-async function uploadJsonPayload(payload) {
-  const response = await fetchJson("/api/history/import", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-  await handleImportResponse(response);
 }
 
 let searchTimeout;
@@ -328,10 +432,20 @@ searchInput.addEventListener("input", () => {
   }
   searchTimeout = setTimeout(async () => {
     try {
-      const data = await fetchJson(
-        `/api/golfers?search=${encodeURIComponent(query)}`
-      );
-      renderSearchResults(data.players || []);
+      if (!selectedEvent) {
+        setStatusMessage("Select a tournament to search golfers.", true);
+        return;
+      }
+      let endpoint = `/api/golfers?search=${encodeURIComponent(query)}`;
+      if (!selectedEvent.isCurrent && selectedEvent.hasField) {
+        endpoint = `/api/schedule/${selectedEvent.id}/golfers?search=${encodeURIComponent(
+          query
+        )}`;
+      } else if (!selectedEvent.hasField) {
+        endpoint = `/api/roster?search=${encodeURIComponent(query)}`;
+      }
+      const data = await fetchJson(endpoint);
+      renderSearchResults(data.players || [], query);
     } catch (error) {
       setStatusMessage(`Search failed: ${error.message}`, true);
     }
@@ -344,34 +458,9 @@ document.addEventListener("click", (event) => {
   }
 });
 
-uploadFileButton.addEventListener("click", async () => {
-  const file = historyFile.files?.[0];
-  if (!file) {
-    setUploadStatus("Select a CSV file before uploading.", true);
-    return;
-  }
-  try {
-    const text = await file.text();
-    await uploadCsv(text);
-    historyFile.value = "";
-  } catch (error) {
-    setUploadStatus(`Upload failed: ${error.message}`, true);
-  }
-});
-
-uploadJsonButton.addEventListener("click", async () => {
-  const rawText = historyJson.value.trim();
-  if (!rawText) {
-    setUploadStatus("Paste JSON records before uploading.", true);
-    return;
-  }
-  try {
-    const payload = JSON.parse(rawText);
-    await uploadJsonPayload(payload);
-    historyJson.value = "";
-  } catch (error) {
-    setUploadStatus(`JSON upload failed: ${error.message}`, true);
-  }
+eventSelect.addEventListener("change", () => {
+  const event = scheduleEvents.find((item) => item.id === eventSelect.value);
+  setSelectedEvent(event || null);
 });
 
 refreshNow.addEventListener("click", async () => {
@@ -385,6 +474,7 @@ refreshNow.addEventListener("click", async () => {
 
 async function loadAll() {
   await loadStatus();
+  await loadSchedule();
   await loadSelections();
   await loadHistory();
   await loadTotals();
