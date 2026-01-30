@@ -40,6 +40,7 @@ const storeDefaults = {
 
 let store = { ...storeDefaults };
 let payoutSchedule = [...DEFAULT_PAYOUT_PCTS];
+let storeWritePromise = Promise.resolve();
 
 let leaderboardCache = {
   event: null,
@@ -319,6 +320,13 @@ async function saveStore() {
   await fsp.writeFile(STORE_PATH, payload, "utf8");
 }
 
+function queueSaveStore() {
+  storeWritePromise = storeWritePromise
+    .catch(() => null)
+    .then(() => saveStore());
+  return storeWritePromise;
+}
+
 async function loadPayoutSchedule() {
   try {
     if (!fs.existsSync(PAYOUT_SCHEDULE_PATH)) {
@@ -571,7 +579,7 @@ function finalizeSelectionsIfNeeded() {
   });
 
   store.selections = remainingSelections;
-  saveStore().catch((error) => {
+  queueSaveStore().catch((error) => {
     console.warn("Failed to persist finalized selections:", error.message);
   });
 }
@@ -625,7 +633,7 @@ function finalizeSelectionsFromSchedule() {
   });
 
   store.selections = remainingSelections;
-  saveStore().catch((error) => {
+  queueSaveStore().catch((error) => {
     console.warn("Failed to persist schedule selections:", error.message);
   });
 }
@@ -874,7 +882,7 @@ app.post("/api/selections", async (req, res) => {
     }
 
     store.history.unshift(historyItem);
-    return saveStore()
+    return queueSaveStore()
       .then(() => res.status(201).json({ type: "history", item: historyItem }))
       .catch((error) => {
         console.warn("Failed to save history:", error.message);
@@ -908,7 +916,7 @@ app.post("/api/selections", async (req, res) => {
   };
   store.selections.push(selection);
 
-  saveStore()
+  queueSaveStore()
     .then(() => {
       res.status(201).json({ type: "selection", selection: buildSelectionResponse(selection) });
     })
@@ -926,7 +934,7 @@ app.delete("/api/selections/:id", (req, res) => {
   }
   store.selections.splice(index, 1);
 
-  saveStore()
+  queueSaveStore()
     .then(() => res.json({ ok: true }))
     .catch((error) => {
       console.warn("Failed to remove selection:", error.message);
