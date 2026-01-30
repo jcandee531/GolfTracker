@@ -318,7 +318,6 @@ function renderHistory(history) {
       <span>${item.eventName || "--"}</span>
       <span>${item.finalPosition ? `#${item.finalPosition}` : "--"}</span>
       <span>${formatCurrency(item.finalEarnings || 0)}</span>
-      <span>${formatDate(item.finalizedAt)}</span>
     `;
     historyRows.appendChild(row);
   });

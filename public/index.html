@@ -31,6 +31,14 @@
 
       <main>
         <section class="card">
+          <div class="card-header">
+            <h2>Current Golfer</h2>
+            <p class="muted">Selections are stored on disk for return visits.</p>
+          </div>
+          <div id="saved-golfers" class="grid"></div>
+        </section>
+
+        <section class="card">
           <h2>Find a golfer</h2>
           <p class="muted">
             Choose a tournament from this year and search for a golfer.
@@ -54,14 +62,6 @@
 
         <section class="card">
           <div class="card-header">
-            <h2>Saved golfers</h2>
-            <p class="muted">Selections are stored on disk for return visits.</p>
-          </div>
-          <div id="saved-golfers" class="grid"></div>
-        </section>
-
-        <section class="card">
-          <div class="card-header">
             <h2>Historical selections</h2>
             <div class="totals">
               <span class="muted">Calendar year total</span>
@@ -74,7 +74,6 @@
               <span>Event</span>
               <span>Final position</span>
               <span>Final earnings</span>
-              <span>Finalized</span>
             </div>
             <div id="history-rows" class="table-body"></div>
           </div>
