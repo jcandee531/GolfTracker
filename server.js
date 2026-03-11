@@ -9,6 +9,8 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const STORE_PATH = path.join(DATA_DIR, "store.json");
+const STORE_BACKUP_PATH = `${STORE_PATH}.bak`;
+const STORE_TMP_PATH = `${STORE_PATH}.tmp`;
 const PGA_SCOREBOARD_URL =
   process.env.PGA_SCOREBOARD_URL ||
   "https://site.api.espn.com/apis/site/v2/sports/golf/pga/scoreboard";
@@ -360,14 +362,37 @@ async function loadStore() {
     };
   } catch (error) {
     console.warn("Failed to load store:", error.message);
-    return { ...storeDefaults };
+    try {
+      if (!fs.existsSync(STORE_BACKUP_PATH)) {
+        return { ...storeDefaults };
+      }
+      const backupRaw = await fsp.readFile(STORE_BACKUP_PATH, "utf8");
+      const backupParsed = JSON.parse(backupRaw);
+      const restored = {
+        selections: Array.isArray(backupParsed.selections)
+          ? backupParsed.selections
+          : [],
+        history: Array.isArray(backupParsed.history) ? backupParsed.history : []
+      };
+      const payload = JSON.stringify(restored, null, 2);
+      await fsp.writeFile(STORE_TMP_PATH, payload, "utf8");
+      await fsp.rename(STORE_TMP_PATH, STORE_PATH);
+      return restored;
+    } catch (backupError) {
+      console.warn("Failed to restore from backup store:", backupError.message);
+      return { ...storeDefaults };
+    }
   }
 }
 
 async function saveStore() {
   await ensureDataDir();
   const payload = JSON.stringify(store, null, 2);
-  await fsp.writeFile(STORE_PATH, payload, "utf8");
+  if (fs.existsSync(STORE_PATH)) {
+    await fsp.copyFile(STORE_PATH, STORE_BACKUP_PATH);
+  }
+  await fsp.writeFile(STORE_TMP_PATH, payload, "utf8");
+  await fsp.rename(STORE_TMP_PATH, STORE_PATH);
 }
 
 function queueSaveStore() {
