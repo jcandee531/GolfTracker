@@ -23,6 +23,11 @@ const PAYOUT_SCHEDULE_PATH =
   process.env.PAYOUT_SCHEDULE_PATH || path.join(DATA_DIR, "payouts.json");
 const EVENT_PURSE_PATH =
   process.env.EVENT_PURSE_PATH || path.join(DATA_DIR, "event-purses.json");
+const BUNDLED_EVENT_PURSE_PATH = path.join(
+  __dirname,
+  "config",
+  "event-purses.json"
+);
 const SCHEDULE_REFRESH_MINUTES = Number(
   process.env.SCHEDULE_REFRESH_MINUTES || 360
 );
@@ -160,6 +165,24 @@ function resolveEventPurse(eventId, eventName) {
   const normalizedName = normalizeEventName(eventName);
   if (normalizedName && eventPurseConfig.byName.has(normalizedName)) {
     return { purse: eventPurseConfig.byName.get(normalizedName), source: "name" };
+  }
+  if (normalizedName) {
+    let bestKey = null;
+    let bestValue = null;
+    eventPurseConfig.byName.forEach((value, key) => {
+      if (key.length < 10) {
+        return;
+      }
+      if (normalizedName.includes(key)) {
+        if (!bestKey || key.length > bestKey.length) {
+          bestKey = key;
+          bestValue = value;
+        }
+      }
+    });
+    if (bestValue) {
+      return { purse: bestValue, source: "name" };
+    }
   }
   return { purse: eventPurseConfig.defaultPurse, source: "default" };
 }
@@ -444,14 +467,11 @@ async function loadEventPurses() {
     byName: new Map()
   };
 
-  try {
-    if (!fs.existsSync(EVENT_PURSE_PATH)) {
-      return config;
+  const applyParsed = (parsed) => {
+    if (!parsed || typeof parsed !== "object") {
+      return;
     }
-    const raw = await fsp.readFile(EVENT_PURSE_PATH, "utf8");
-    const parsed = JSON.parse(raw);
-
-    if (parsed?.defaultPurse !== undefined) {
+    if (parsed.defaultPurse !== undefined) {
       const defaultValue = Number(parsed.defaultPurse);
       if (Number.isFinite(defaultValue) && defaultValue > 0) {
         config.defaultPurse = defaultValue;
@@ -473,13 +493,27 @@ async function loadEventPurses() {
       }
     };
 
-    const byId = parsed?.byId || {};
-    const byName = parsed?.byName || {};
-    const events = parsed?.events || {};
+    const byId = parsed.byId || {};
+    const byName = parsed.byName || {};
+    const events = parsed.events || {};
 
     Object.entries(byId).forEach(([key, value]) => addEntry(key, value));
     Object.entries(byName).forEach(([key, value]) => addEntry(key, value));
     Object.entries(events).forEach(([key, value]) => addEntry(key, value));
+  };
+
+  const loadFile = async (filePath) => {
+    if (!filePath || !fs.existsSync(filePath)) {
+      return;
+    }
+    const raw = await fsp.readFile(filePath, "utf8");
+    const parsed = JSON.parse(raw);
+    applyParsed(parsed);
+  };
+
+  try {
+    await loadFile(BUNDLED_EVENT_PURSE_PATH);
+    await loadFile(EVENT_PURSE_PATH);
   } catch (error) {
     console.warn("Failed to load event purses:", error.message);
   }

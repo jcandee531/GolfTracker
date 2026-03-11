@@ -33,10 +33,13 @@ Environment variables:
 - `EVENT_PURSE_PATH`: Optional JSON map of event purses
   (default `./data/event-purses.json` if present)
 
-Projected earnings are estimates. Update `DEFAULT_PURSE_USD` or provide a
-custom payout schedule to match the tournament you are tracking.
+Projected earnings are estimates. A bundled 2026 purse list (from a public
+schedule listing) is included in `config/event-purses.json` and is used
+automatically on deploy. Some unofficial or team events may still fall back to
+the default purse. You can override it without redeploying by providing your
+own file in `DATA_DIR`.
 
-To use accurate per-tournament purses, create `event-purses.json` like:
+To override per-tournament purses, create `event-purses.json` like:
 
 ```json
 {
