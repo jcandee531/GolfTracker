@@ -1,0 +1,14 @@
+{
+  "name": "pga-golfer-earnings-tracker",
+  "version": "1.0.0",
+  "description": "Basic PGA golfer earnings tracker with persistent selections",
+  "main": "server.js",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}

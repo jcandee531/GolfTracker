@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PGA Golfer Earnings Tracker</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">PGA earnings tracker</p>
+          <h1>Track your golfers in near real time</h1>
+          <p class="subtitle">
+            Search the current event, save multiple golfers, and track projected
+            payouts alongside final earnings.
+          </p>
+          <p id="status-message" class="muted status-message"></p>
+        </div>
+        <div class="status-card">
+          <h2 id="event-name">Loading event...</h2>
+          <p id="event-dates" class="muted"></p>
+          <div class="status-row">
+            <span id="event-status" class="status-pill">Loading status</span>
+            <span id="last-updated" class="muted">Updating...</span>
+          </div>
+          <button id="refresh-now" class="secondary">Refresh now</button>
+        </div>
+      </header>
+
+      <main>
+        <section class="card">
+          <div class="card-header">
+            <h2>Current Golfer</h2>
+            <p class="muted">Selections are stored on disk for return visits.</p>
+          </div>
+          <div id="saved-golfers" class="grid"></div>
+        </section>
+
+        <section class="card">
+          <h2>Find a golfer</h2>
+          <p class="muted">
+            Choose a tournament from this year and search for a golfer.
+          </p>
+          <div class="event-select">
+            <label for="event-select">Tournament</label>
+            <select id="event-select"></select>
+            <p id="event-meta" class="muted"></p>
+          </div>
+          <div class="search">
+            <input
+              id="golfer-search"
+              type="text"
+              placeholder="Search golfers by name"
+              autocomplete="off"
+            />
+            <div id="search-results" class="search-results"></div>
+          </div>
+          <div id="selection-preview" class="preview"></div>
+        </section>
+
+        <section class="card">
+          <div class="card-header">
+            <h2>Historical selections</h2>
+            <div class="totals">
+              <span class="muted">Calendar year total</span>
+              <span id="total-earnings" class="total-value">--</span>
+            </div>
+          </div>
+          <div class="table">
+            <div class="table-head">
+              <span>Golfer</span>
+              <span>Event</span>
+              <span>Final position</span>
+              <span>Final earnings</span>
+            </div>
+            <div id="history-rows" class="table-body"></div>
+          </div>
+        </section>
+
+        <section class="card note-card">
+          <h3>How projected earnings are calculated</h3>
+          <p class="muted">
+            Projections are estimated using a default PGA payout distribution
+            applied to the event purse. Update the purse or payout schedule with
+            server settings when you deploy on Render.
+          </p>
+        </section>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
