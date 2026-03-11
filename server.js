@@ -21,6 +21,8 @@ const REFRESH_INTERVAL_MS = Math.max(1, REFRESH_INTERVAL_MINUTES) * 60 * 1000;
 const DEFAULT_PURSE_USD = Number(process.env.DEFAULT_PURSE_USD || 8500000);
 const PAYOUT_SCHEDULE_PATH =
   process.env.PAYOUT_SCHEDULE_PATH || path.join(DATA_DIR, "payouts.json");
+const EVENT_PURSE_PATH =
+  process.env.EVENT_PURSE_PATH || path.join(DATA_DIR, "event-purses.json");
 const SCHEDULE_REFRESH_MINUTES = Number(
   process.env.SCHEDULE_REFRESH_MINUTES || 360
 );
@@ -43,6 +45,11 @@ const storeDefaults = {
 let store = { ...storeDefaults };
 let payoutSchedule = [...DEFAULT_PAYOUT_PCTS];
 let storeWritePromise = Promise.resolve();
+let eventPurseConfig = {
+  defaultPurse: DEFAULT_PURSE_USD,
+  byId: new Map(),
+  byName: new Map()
+};
 
 let leaderboardCache = {
   event: null,
@@ -144,6 +151,17 @@ function countEntriesForEvent(eventId, eventName) {
   const selectionCount = store.selections.filter(eventMatches).length;
   const historyCount = store.history.filter(eventMatches).length;
   return selectionCount + historyCount;
+}
+
+function resolveEventPurse(eventId, eventName) {
+  if (eventId && eventPurseConfig.byId.has(eventId)) {
+    return { purse: eventPurseConfig.byId.get(eventId), source: "id" };
+  }
+  const normalizedName = normalizeEventName(eventName);
+  if (normalizedName && eventPurseConfig.byName.has(normalizedName)) {
+    return { purse: eventPurseConfig.byName.get(normalizedName), source: "name" };
+  }
+  return { purse: eventPurseConfig.defaultPurse, source: "default" };
 }
 
 function estimateEarnings(position, purse, schedule) {
@@ -251,6 +269,7 @@ function buildEventInfoFromSchedule(eventData) {
   if (!eventData) {
     return null;
   }
+  const purseInfo = resolveEventPurse(eventData.id, eventData.name);
   return {
     id: eventData.id,
     name: eventData.name,
@@ -261,8 +280,8 @@ function buildEventInfoFromSchedule(eventData) {
     statusState: eventData.statusState,
     isFinal: eventData.isFinal,
     entryLimit: eventData.entryLimit ?? getEventEntryLimit(eventData.name),
-    purse: DEFAULT_PURSE_USD,
-    purseEstimated: true
+    purse: purseInfo.purse,
+    purseEstimated: purseInfo.source === "default"
   };
 }
 
@@ -418,11 +437,62 @@ async function loadPayoutSchedule() {
   return [...DEFAULT_PAYOUT_PCTS];
 }
 
+async function loadEventPurses() {
+  const config = {
+    defaultPurse: DEFAULT_PURSE_USD,
+    byId: new Map(),
+    byName: new Map()
+  };
+
+  try {
+    if (!fs.existsSync(EVENT_PURSE_PATH)) {
+      return config;
+    }
+    const raw = await fsp.readFile(EVENT_PURSE_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+
+    if (parsed?.defaultPurse !== undefined) {
+      const defaultValue = Number(parsed.defaultPurse);
+      if (Number.isFinite(defaultValue) && defaultValue > 0) {
+        config.defaultPurse = defaultValue;
+      }
+    }
+
+    const addEntry = (key, value) => {
+      const parsedValue = Number(value);
+      if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
+        return;
+      }
+      if (String(key).match(/^\d+$/)) {
+        config.byId.set(String(key), parsedValue);
+      } else {
+        const normalized = normalizeEventName(key);
+        if (normalized) {
+          config.byName.set(normalized, parsedValue);
+        }
+      }
+    };
+
+    const byId = parsed?.byId || {};
+    const byName = parsed?.byName || {};
+    const events = parsed?.events || {};
+
+    Object.entries(byId).forEach(([key, value]) => addEntry(key, value));
+    Object.entries(byName).forEach(([key, value]) => addEntry(key, value));
+    Object.entries(events).forEach(([key, value]) => addEntry(key, value));
+  } catch (error) {
+    console.warn("Failed to load event purses:", error.message);
+  }
+
+  return config;
+}
+
 function buildEventInfo(event) {
   if (!event) {
     return null;
   }
   const status = formatEventStatus(event);
+  const purseInfo = resolveEventPurse(event.id, event.name);
   return {
     id: event.id,
     name: event.name,
@@ -432,13 +502,14 @@ function buildEventInfo(event) {
     statusDescription: status.description || "Status unavailable",
     statusState: status.state || "unknown",
     isFinal: Boolean(status.completed),
-    purse: DEFAULT_PURSE_USD,
-    purseEstimated: true
+    purse: purseInfo.purse,
+    purseEstimated: purseInfo.source === "default"
   };
 }
 
 async function refreshLeaderboard() {
   try {
+    eventPurseConfig = await loadEventPurses();
     const response = await fetch(PGA_SCOREBOARD_URL, {
       headers: {
         "User-Agent": "pga-earnings-tracker"
@@ -458,7 +529,7 @@ async function refreshLeaderboard() {
         statusDescription: "Status unavailable",
         isFinal: false
       },
-      DEFAULT_PURSE_USD,
+      eventInfo?.purse || DEFAULT_PURSE_USD,
       payoutSchedule
     );
 
@@ -497,6 +568,7 @@ function buildScheduleEvent(event) {
   const status = formatEventStatus(event);
   const competition = event.competitions?.[0];
   const competitors = competition?.competitors || [];
+  const purseInfo = resolveEventPurse(event.id, event.name);
   const eventInfo = {
     id: event.id,
     name: event.name,
@@ -508,13 +580,15 @@ function buildScheduleEvent(event) {
     isFinal: Boolean(status.completed),
     hasField: competitors.length > 0,
     fieldCount: competitors.length,
-    entryLimit: getEventEntryLimit(event.name)
+    entryLimit: getEventEntryLimit(event.name),
+    purse: purseInfo.purse,
+    purseEstimated: purseInfo.source === "default"
   };
 
   const players = normalizeScheduleCompetitors(
     competitors,
     eventInfo,
-    DEFAULT_PURSE_USD,
+    eventInfo.purse,
     payoutSchedule
   );
 
@@ -534,6 +608,7 @@ function buildScheduleEvent(event) {
 
 async function refreshSchedule(year = getCurrentYear()) {
   try {
+    eventPurseConfig = await loadEventPurses();
     const url = buildScoreboardUrl({
       dates: `${year}0101-${year}1231`
     });
@@ -694,7 +769,7 @@ function finalizeSelectionsFromSchedule() {
       finalPosition: player.position,
       finalEarnings: estimateEarnings(
         player.position,
-        DEFAULT_PURSE_USD,
+        eventData.purse || DEFAULT_PURSE_USD,
         payoutSchedule
       ),
       eventEndDate: eventData.endDate,
@@ -793,6 +868,8 @@ app.get("/api/schedule", async (req, res) => {
     hasField: event.hasField,
     fieldCount: event.fieldCount,
     entryLimit: event.entryLimit,
+    purse: event.purse,
+    purseEstimated: event.purseEstimated,
     isCurrent: currentEventId === event.id
   }));
 
@@ -838,7 +915,9 @@ app.get("/api/schedule/:eventId/golfers", async (req, res) => {
       isFinal: eventData.isFinal,
       hasField: eventData.hasField,
       fieldCount: eventData.fieldCount,
-      entryLimit: eventData.entryLimit
+      entryLimit: eventData.entryLimit,
+      purse: eventData.purse,
+      purseEstimated: eventData.purseEstimated
     },
     players: players.slice(0, Math.max(1, limit))
   });
@@ -1071,6 +1150,7 @@ app.post("/api/refresh", async (req, res) => {
 async function startServer() {
   store = await loadStore();
   payoutSchedule = await loadPayoutSchedule();
+  eventPurseConfig = await loadEventPurses();
   await refreshSchedule(getCurrentYear());
   await refreshLeaderboard();
 

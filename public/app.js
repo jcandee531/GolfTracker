@@ -378,10 +378,13 @@ function setSelectedEvent(event) {
     ? `${event.fieldCount} golfers`
     : "Field not posted yet";
   const entryLimit = event.entryLimit || 1;
+  const purseText = event.purse
+    ? `${formatCurrency(event.purse)}${event.purseEstimated ? " est." : ""}`
+    : "Purse unavailable";
   eventMeta.textContent = `${event.statusDescription} · ${formatDateRange(
     event.startDate,
     event.endDate
-  )} · ${fieldText} · Entry limit ${entryLimit}`;
+  )} · ${fieldText} · Entry limit ${entryLimit} · ${purseText}`;
   searchInput.placeholder = event.hasField
     ? "Search golfers by name"
     : "Type a golfer name for this tournament";

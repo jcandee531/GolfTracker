@@ -30,9 +30,24 @@ Environment variables:
 - `DEFAULT_PURSE_USD`: Purse used for earnings projections (default 8,500,000)
 - `PAYOUT_SCHEDULE_PATH`: Optional JSON array of payout percentages
   (default `./data/payouts.json` if present)
+- `EVENT_PURSE_PATH`: Optional JSON map of event purses
+  (default `./data/event-purses.json` if present)
 
 Projected earnings are estimates. Update `DEFAULT_PURSE_USD` or provide a
 custom payout schedule to match the tournament you are tracking.
+
+To use accurate per-tournament purses, create `event-purses.json` like:
+
+```json
+{
+  "defaultPurse": 8500000,
+  "events": {
+    "401811930": 9000000,
+    "The Masters": 18000000,
+    "U.S. Open": 20000000
+  }
+}
+```
 
 ## Selecting past and upcoming tournaments
 
