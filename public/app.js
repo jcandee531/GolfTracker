@@ -377,10 +377,11 @@ function setSelectedEvent(event) {
   const fieldText = event.hasField
     ? `${event.fieldCount} golfers`
     : "Field not posted yet";
+  const entryLimit = event.entryLimit || 1;
   eventMeta.textContent = `${event.statusDescription} · ${formatDateRange(
     event.startDate,
     event.endDate
-  )} · ${fieldText}`;
+  )} · ${fieldText} · Entry limit ${entryLimit}`;
   searchInput.placeholder = event.hasField
     ? "Search golfers by name"
     : "Type a golfer name for this tournament";

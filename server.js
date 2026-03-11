@@ -95,6 +95,55 @@ function getCurrentYear() {
   return new Date().getFullYear();
 }
 
+function normalizeEventName(name) {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+const TWO_ENTRY_EVENT_TOKENS = [
+  "playerschampionship",
+  "theplayerschampionship",
+  "masters",
+  "themasters",
+  "masterstournament",
+  "usopen",
+  "theusopen",
+  "pgachampionship",
+  "thepgachampionship",
+  "britishopen",
+  "theopenchampionship",
+  "openchampionship"
+];
+
+function getEventEntryLimit(eventName) {
+  const normalized = normalizeEventName(eventName);
+  if (!normalized) {
+    return 1;
+  }
+  const isMajor = TWO_ENTRY_EVENT_TOKENS.some((token) =>
+    normalized.includes(token)
+  );
+  return isMajor ? 2 : 1;
+}
+
+function countEntriesForEvent(eventId, eventName) {
+  const normalizedName = normalizeEventName(eventName);
+  const eventMatches = (item) => {
+    if (eventId && item.eventId && item.eventId === eventId) {
+      return true;
+    }
+    if (normalizedName && item.eventName) {
+      return normalizeEventName(item.eventName) === normalizedName;
+    }
+    return false;
+  };
+
+  const selectionCount = store.selections.filter(eventMatches).length;
+  const historyCount = store.history.filter(eventMatches).length;
+  return selectionCount + historyCount;
+}
+
 function estimateEarnings(position, purse, schedule) {
   if (!position || !purse || position < 1) {
     return 0;
@@ -209,6 +258,7 @@ function buildEventInfoFromSchedule(eventData) {
     statusDescription: eventData.statusDescription,
     statusState: eventData.statusState,
     isFinal: eventData.isFinal,
+    entryLimit: eventData.entryLimit ?? getEventEntryLimit(eventData.name),
     purse: DEFAULT_PURSE_USD,
     purseEstimated: true
   };
@@ -432,7 +482,8 @@ function buildScheduleEvent(event) {
     statusState: status.state || "unknown",
     isFinal: Boolean(status.completed),
     hasField: competitors.length > 0,
-    fieldCount: competitors.length
+    fieldCount: competitors.length,
+    entryLimit: getEventEntryLimit(event.name)
   };
 
   const players = normalizeScheduleCompetitors(
@@ -716,6 +767,7 @@ app.get("/api/schedule", async (req, res) => {
     isFinal: event.isFinal,
     hasField: event.hasField,
     fieldCount: event.fieldCount,
+    entryLimit: event.entryLimit,
     isCurrent: currentEventId === event.id
   }));
 
@@ -760,7 +812,8 @@ app.get("/api/schedule/:eventId/golfers", async (req, res) => {
       statusState: eventData.statusState,
       isFinal: eventData.isFinal,
       hasField: eventData.hasField,
-      fieldCount: eventData.fieldCount
+      fieldCount: eventData.fieldCount,
+      entryLimit: eventData.entryLimit
     },
     players: players.slice(0, Math.max(1, limit))
   });
@@ -851,6 +904,8 @@ app.post("/api/selections", async (req, res) => {
     return res.status(400).json({ error: "golferName is required" });
   }
 
+  const entryLimit = getEventEntryLimit(eventInfo?.name);
+
   if (eventInfo?.isFinal) {
     if (!player || !player.position) {
       return res.status(400).json({
@@ -881,6 +936,13 @@ app.post("/api/selections", async (req, res) => {
       return res.json({ type: "history", item: existingHistory });
     }
 
+    const existingCount = countEntriesForEvent(eventInfo.id, eventInfo.name);
+    if (existingCount >= entryLimit) {
+      return res.status(400).json({
+        error: `Entry limit reached for ${eventInfo.name}`
+      });
+    }
+
     store.history.unshift(historyItem);
     return queueSaveStore()
       .then(() => res.status(201).json({ type: "history", item: historyItem }))
@@ -904,6 +966,13 @@ app.post("/api/selections", async (req, res) => {
 
   if (alreadySaved) {
     return res.json({ type: "selection", selection: buildSelectionResponse(alreadySaved) });
+  }
+
+  const existingCount = countEntriesForEvent(eventInfo.id, eventInfo.name);
+  if (existingCount >= entryLimit) {
+    return res.status(400).json({
+      error: `Entry limit reached for ${eventInfo.name}`
+    });
   }
 
   const selection = {
